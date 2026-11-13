@@ -11,16 +11,45 @@ type DB = {
   audit_events: Row[];
 };
 
-const dataDir = path.join(process.cwd(), "data");
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-const dbPath = path.join(dataDir, "poc.json");
-
 const g = globalThis as any;
+
+function resolveDbPath(): string | null {
+  const candidates = [
+    path.join(process.cwd(), "data", "poc.json"),
+    path.join(process.env.TMPDIR || process.env.TEMP || "/tmp", "school-poc.json"),
+  ];
+  for (const p of candidates) {
+    try {
+      const dir = path.dirname(p);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      // probe writability
+      fs.accessSync(dir, fs.constants.W_OK);
+      if (fs.existsSync(p)) {
+        fs.accessSync(p, fs.constants.R_OK);
+      } else {
+        fs.writeFileSync(p, "", { flag: "a" });
+      }
+      return p;
+    } catch {
+      // not usable, try next
+    }
+  }
+  return null;
+}
+
+const dbPath = resolveDbPath();
+
 function getState(): DB {
   if (!g.__pocState) {
-    if (fs.existsSync(dbPath)) {
-      try { g.__pocState = JSON.parse(fs.readFileSync(dbPath, "utf8")); } catch { g.__pocState = empty(); }
-    } else {
+    if (dbPath && fs.existsSync(dbPath)) {
+      try {
+        const raw = fs.readFileSync(dbPath, "utf8").trim();
+        if (raw) g.__pocState = JSON.parse(raw);
+      } catch {
+        g.__pocState = undefined;
+      }
+    }
+    if (!g.__pocState) {
       g.__pocState = empty();
       seed(g.__pocState);
       saveState(g.__pocState);
@@ -33,7 +62,10 @@ function empty(): DB {
   return { users:[], academic_years:[], classes:[], subjects:[], teaching_assignments:[], students:[], guardians:[], student_guardians:[], enrollments:[], attendance_sessions:[], attendance_records:[], assessments:[], assessment_results:[], audit_events:[] };
 }
 
-function saveState(s: DB) { fs.writeFileSync(dbPath, JSON.stringify(s, null, 2), "utf8"); }
+function saveState(s: DB) {
+  if (!dbPath) return;
+  try { fs.writeFileSync(dbPath, JSON.stringify(s, null, 2), "utf8"); } catch { /* read-only/ephemeral FS: keep in-memory */ }
+}
 function save() { saveState(getState()); }
 
 export function getDb() {
